@@ -1,6 +1,6 @@
-use sqlx::{Connection, PgConnection, PgPool};
+use sqlx::{types::Uuid, Connection, Executor, PgConnection, PgPool};
 use std::net::TcpListener;
-use zero2prod::configuration::get_configuration;
+use zero2prod::configuration::{get_configuration, DatabaseSettings};
 
 pub struct TestApp {
     pub address: String,
@@ -10,12 +10,11 @@ pub struct TestApp {
 async fn spawn_app() -> TestApp {
     let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind random port");
     let port = listener.local_addr().unwrap().port();
-    let configuration = get_configuration().expect("Failed to read configuration.");
+    let mut configuration = get_configuration().expect("Failed to read configuration.");
+    // set Db name random for the test to isolate tests
+    configuration.database.database_name = Uuid::new_v4().to_string();
     let address = format!("http://127.0.0.1:{}", port);
-    let connection_pool = PgPool::connect(&configuration.database.connection_string())
-        .await
-        .expect("Failed to connect to DB.");
-
+    let connection_pool = configure_database(&configuration.database).await;
     let server =
         zero2prod::startup::run(listener, connection_pool.clone()).expect("Failed to bind address");
 
@@ -25,6 +24,46 @@ async fn spawn_app() -> TestApp {
         address,
         connection_pool,
     }
+}
+
+pub async fn configure_database(config: &DatabaseSettings) -> PgPool {
+    // create DB
+    let mut connection = PgConnection::connect(&config.connection_string_without_db())
+        .await
+        .expect("Failed to connect to DB");
+
+    /* This could maybe be done with sqlx's macros but I can't figure it out
+       get the following error:
+        ```
+        error: expected 0 parameters, got 1
+          --> tests/health_check.rs:35:5
+           |
+        35 |     sqlx::query!(r#"CREATE DATABASE "$1";"#, &config.database_name)
+           |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+           |
+           = note: this error originates in the macro `$crate::sqlx_macros::expand_query` which comes from the expansion of the macro `sqlx::query` (in Nightly builds, run with -Z
+         macro-backtrace for more info)
+        ```
+    // Using this code:
+    // sqlx::query!(r#"CREATE DATABASE "$1";"#, &config.database_name)
+    //     .execute(&mut connection)
+    //     .await
+    //     .expect("Failed to create DB");
+    */
+    connection
+        .execute(format!(r#"CREATE DATABASE "{}";"#, config.database_name).as_str())
+        .await
+        .expect("Failed to create DB");
+
+    let connection_pool = PgPool::connect(&config.connection_string())
+        .await
+        .expect("Failed to connect to DB");
+    sqlx::migrate!("./migrations")
+        .run(&connection_pool)
+        .await
+        .expect("Failed DB migration");
+
+    connection_pool
 }
 
 #[tokio::test]
@@ -50,12 +89,9 @@ async fn health_check_works() {
 #[tokio::test]
 async fn subscribe_returns_a_200_for_valid_form_data() {
     // Arrange
-    let app_address = spawn_app().await.address;
-    let configuration = get_configuration().expect("Failed to read configuration");
-    let connection_string = configuration.database.connection_string();
-    let mut connection = PgConnection::connect(&connection_string)
-        .await
-        .expect("Failed to connect to DB");
+    let app = spawn_app().await;
+    let app_address = &app.address;
+    let connection = app.connection_pool;
     let client = reqwest::Client::new();
 
     // Act
@@ -72,7 +108,7 @@ async fn subscribe_returns_a_200_for_valid_form_data() {
     assert_eq!(200, response.status().as_u16());
 
     let saved = sqlx::query!("SELECT email, name FROM subscriptions",)
-        .fetch_one(&mut connection)
+        .fetch_one(&connection)
         .await
         .expect("Failed to fetch saved subscription");
     assert_eq!(saved.email, "ursula_le_guin@gmail.com");
