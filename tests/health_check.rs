@@ -1,20 +1,35 @@
-use sqlx::{Connection, PgConnection};
+use sqlx::{Connection, PgConnection, PgPool};
 use std::net::TcpListener;
-use zero2prod::configuration::{self, get_configuration};
+use zero2prod::configuration::get_configuration;
 
-fn spawn_app() -> String {
+pub struct TestApp {
+    pub address: String,
+    pub connection_pool: PgPool,
+}
+
+async fn spawn_app() -> TestApp {
     let listener = TcpListener::bind("127.0.0.1:0").expect("Failed to bind random port");
     let port = listener.local_addr().unwrap().port();
-    let server = zero2prod::startup::run(listener).expect("Failed to bind address");
+    let configuration = get_configuration().expect("Failed to read configuration.");
+    let address = format!("http://127.0.0.1:{}", port);
+    let connection_pool = PgPool::connect(&configuration.database.connection_string())
+        .await
+        .expect("Failed to connect to DB.");
+
+    let server =
+        zero2prod::startup::run(listener, connection_pool.clone()).expect("Failed to bind address");
 
     let _ = tokio::spawn(server);
 
-    format!("http://127.0.0.1:{}", port)
+    TestApp {
+        address,
+        connection_pool,
+    }
 }
 
 #[tokio::test]
 async fn health_check_works() {
-    let app_address = spawn_app();
+    let app_address = spawn_app().await.address;
 
     // We need to bring in `reqwest`
     // to perform HTTP requests against our application.
@@ -35,7 +50,7 @@ async fn health_check_works() {
 #[tokio::test]
 async fn subscribe_returns_a_200_for_valid_form_data() {
     // Arrange
-    let app_address = spawn_app();
+    let app_address = spawn_app().await.address;
     let configuration = get_configuration().expect("Failed to read configuration");
     let connection_string = configuration.database.connection_string();
     let mut connection = PgConnection::connect(&connection_string)
@@ -61,13 +76,13 @@ async fn subscribe_returns_a_200_for_valid_form_data() {
         .await
         .expect("Failed to fetch saved subscription");
     assert_eq!(saved.email, "ursula_le_guin@gmail.com");
-    assert_eq!(saved.name, "le_guin");
+    assert_eq!(saved.name, "le guin");
 }
 
 #[tokio::test]
 async fn subscribe_returns_a_400_when_data_is_missing() {
     // Arrange
-    let app_address = spawn_app();
+    let app_address = spawn_app().await.address;
     let client = reqwest::Client::new();
     let test_cases = vec![
         ("name=le%20guin", "missing the email"),
