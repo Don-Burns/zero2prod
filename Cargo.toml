@@ -27,6 +27,11 @@ chrono = {version = "0.4.22", default-features = false, features = ["clock"]}
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v4"]}
+# tracing
+tracing = {version = "0.1", features = ["log"]}
+tracing-subscriber = { version = "0.3", features = ["registry", "env-filter"]}
+tracing-bunyan-formatter = "0.3"
+tracing-log = "0.1"
 # Using table-like toml syntax to avoid a super-long line!
 [dependencies.sqlx]
 version = "0.6"
@@ -42,4 +47,6 @@ features = [
 # Dev dependencies are used exclusively when running tests or examples
 # They do not get included in the final application binary!
 [dev-dependencies]
+once_cell = "1"
 reqwest = "0.11"
+
