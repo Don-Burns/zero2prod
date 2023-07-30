@@ -1,4 +1,5 @@
 use once_cell::sync::Lazy;
+use secrecy::ExposeSecret;
 use sqlx::{types::Uuid, Connection, Executor, PgConnection, PgPool};
 use std::net::TcpListener;
 use zero2prod::configuration::{get_configuration, DatabaseSettings};
@@ -48,9 +49,10 @@ async fn spawn_app() -> TestApp {
 
 pub async fn configure_database(config: &DatabaseSettings) -> PgPool {
     // create DB
-    let mut connection = PgConnection::connect(&config.connection_string_without_db())
-        .await
-        .expect("Failed to connect to DB");
+    let mut connection =
+        PgConnection::connect(&config.connection_string_without_db().expose_secret())
+            .await
+            .expect("Failed to connect to DB");
 
     /* This could maybe be done with sqlx's macros but I can't figure it out
        get the following error:
@@ -75,7 +77,7 @@ pub async fn configure_database(config: &DatabaseSettings) -> PgPool {
         .await
         .expect("Failed to create DB");
 
-    let connection_pool = PgPool::connect(&config.connection_string())
+    let connection_pool = PgPool::connect(&config.connection_string().expose_secret())
         .await
         .expect("Failed to connect to DB");
     sqlx::migrate!("./migrations")
